@@ -35,7 +35,7 @@ struct Config {
   float TEMP_OFFSET;
 };
 
-String version = "1.0.0";
+String version = "1.0.1";
 float temp;
 int last_min, last_hour = -1;
 char last_time[] = "000.0 000.";
@@ -280,6 +280,7 @@ float get_temp() {
 
 void faceClock(){
     if (last_hour != hour()) {
+    setTime(CE.toLocal(timeClient.getEpochTime()));
     if (hour() <= 9) {
       last_time[0] = '0';
       last_time[1] = 48 + hour();
@@ -312,7 +313,11 @@ void faceClock(){
     else {
       a = (rounding((get_temp() + config.TEMP_OFFSET), 1)*10);
     }
-    last_time[6] = 48 + (int(a)/100) % 10;
+    if (int(a) >= 100) {
+      last_time[6] = 48 + (int(a)/100) % 10;
+    } else {
+      last_time[6] = last_time[5];
+    }
     last_time[7] = 48 + (int(a)/10) % 10;
     last_time[8] = 48 + (int(a) % 10);
     last_temp_time = millis();
