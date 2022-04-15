@@ -14,10 +14,12 @@
 #define debug(x) Serial.print(x)
 #define debugln(x) Serial.println(x)
 #define serial(x) Serial.begin(x)
+#define debugstat "-d"
 #else
 #define debug(x)
 #define debugln(x)
 #define serial(x)
+#define debugstat 
 #endif
 
 #define SHIFT_PIN_DS   D0 /* Data input PIN */
@@ -35,7 +37,7 @@ struct Config {
   float TEMP_OFFSET;
 };
 
-String version = "1.0.1";
+String version = "1.0.2";
 float temp;
 int last_min, last_hour = -1;
 char last_time[] = "000.0 000.";
@@ -60,7 +62,7 @@ byte digitPins[] = {13,9,15,14,11,10,12,8};
 WiFiUDP ntpUDP;
 
 int GTMOffset = 0;
-NTPClient timeClient(ntpUDP, "europe.pool.ntp.org", GTMOffset*60*60, 60*60*1000);
+NTPClient timeClient(ntpUDP, "pool.ntp.org", GTMOffset*60*60, 59*60*1000);
 
 TimeChangeRule CEST = {"CEST", Last, Sun, Mar, 2, 120};     // Central European Summer Time
 TimeChangeRule CET = {"CET ", Last, Sun, Oct, 3, 60};       // Central European Standard Time
@@ -112,9 +114,55 @@ void saveConfiguration(const char *filename_conf, const Config &config) {
 
 void(* resetFunc) (void) = 0;
 
+float get_temp_refresh() {
+  oneWire.reset();
+  sevseg.refreshDisplay();
+  oneWire.skip();
+  sevseg.refreshDisplay();
+  oneWire.write(0xBE);
+  sevseg.refreshDisplay();
+
+  uint8_t data[9];
+  for (uint8_t i = 0; i < 9; i++) {
+    sevseg.refreshDisplay();
+    data[i] = oneWire.read();
+    sevseg.refreshDisplay();
+  }
+  int16_t rawTemperature = (((int16_t)data[1]) << 8) | data[0];
+  sevseg.refreshDisplay();
+  float temp = 0.0625 * rawTemperature;
+  sevseg.refreshDisplay();
+  oneWire.reset();
+  sevseg.refreshDisplay();
+  oneWire.skip();
+  sevseg.refreshDisplay();
+  oneWire.write(0x44, 0);
+  sevseg.refreshDisplay();
+  return temp;
+}
+
+float get_temp() {
+  oneWire.reset();
+  oneWire.skip();
+  oneWire.write(0xBE);
+
+  uint8_t data[9];
+  for (uint8_t i = 0; i < 9; i++) {
+    data[i] = oneWire.read();
+  }
+  int16_t rawTemperature = (((int16_t)data[1]) << 8) | data[0];
+  float temp = 0.0625 * rawTemperature;
+  oneWire.reset();
+  oneWire.skip();
+  oneWire.write(0x44, 0);
+  return temp;
+}
+
 void setup() {
   serial(115200);
-  debugln("Begin setup");
+    while (!Serial) {};
+  debugln("###Begin setup###");
+  
   byte numDigits = 8;
   bool resistorsOnSegments = false; // 'false' means resistors are on digit pins
   byte hardwareConfig = COMMON_ANODE; // See README.md for options
@@ -163,18 +211,26 @@ void setup() {
    setTime(CE.toLocal(epoch));
    debugln(String(hour()) + ":" + String(minute()) + ":" + String(second()));
   }else{
-    debugln( "NTP Update not WORK!!" );
+    debugln("NTP Update not WORK!!");
   }
-
-  oneWire.reset();
-  oneWire.skip();
-  oneWire.write(0x44, 0);
+  
+  debugln("Get & Set Temp");
+  float a = (rounding((get_temp() + config.TEMP_OFFSET), 1)*10);
+  if (int(a) >= 100) {
+    last_time[6] = 48 + (int(a)/100) % 10;
+  } else {
+    last_time[6] = last_time[5];
+  }
+  last_time[7] = 48 + (int(a)/10) % 10;
+  last_time[8] = 48 + (int(a) % 10);
+  last_temp_time = millis();
+  
   httpUpdater.setup(&server);
   server.on("/", configurehandler);
   server.on("/setconfig", handleconfig);
   server.on("/gettemp", handletemp);
   server.begin();
-  debugln("Setup complete\n");
+  debugln("###Setup complete###\n");
 }
 
 void handleconfig() {
@@ -222,7 +278,7 @@ void handletemp(){
 }
  
 void configurehandler() {
-  server.send(200, "text/html", "<html><head><title>ESP8266-Clock Web-UI</title><style>#formdiv,h2{text-align:center}label{display:block;margin-right:auto;margin-left:auto}#upfirm{position:fixed;color:#888;bottom:8px;right:16px}#ver{position:fixed;color:#888;bottom:8px;left:16px}body{font-family:Helvetica;background-color:#161618;color:#f2f5f4}</style></head><body><h2>ESP8266-Clock Web-UI</h2><div id='formdiv'><form action='/setconfig' onsubmit='return confirm(\"Save settings?\")'><label for='fname'>WIFI Name ("+String(config.WIFI_SSID)+"):</label><input id='SSID' name='SSID'><br><br><label for='lname'>WIFI PW:</label><input type='password' id='PW' name='PW'><br><br><label for='lname'>TEMP OFFSET ("+String(config.TEMP_OFFSET,3)+"):</label><input id='TEMP_OFFSET' name='TEMP_OFFSET'><br><br><label for='lname'>Hostname ("+(config.HOSTNAME)+"):</label><input id='HOSTNAME' name='HOSTNAME'><br><br><input type='submit' value='Submit'></form></div><a id='upfirm' href='/update'>Update Firmware</a> <a id='ver'>"+version+"</a></body></html>");
+  server.send(200, "text/html", "<html><head><title>ESP8266-Clock Web-UI</title><style>#formdiv,h2{text-align:center}label{display:block;margin-right:auto;margin-left:auto}#upfirm{position:fixed;color:#888;bottom:8px;right:16px}#ver{position:fixed;color:#888;bottom:8px;left:16px}body{font-family:Helvetica;background-color:#161618;color:#f2f5f4}</style></head><body><h2>ESP8266-Clock Web-UI</h2><div id='formdiv'><form action='/setconfig' onsubmit='return confirm(\"Save settings?\")'><label for='fname'>WIFI Name ("+String(config.WIFI_SSID)+"):</label><input id='SSID' name='SSID'><br><br><label for='lname'>WIFI PW:</label><input type='password' id='PW' name='PW'><br><br><label for='lname'>TEMP OFFSET ("+String(config.TEMP_OFFSET,3)+"):</label><input id='TEMP_OFFSET' name='TEMP_OFFSET'><br><br><label for='lname'>Hostname ("+(config.HOSTNAME)+"):</label><input id='HOSTNAME' name='HOSTNAME'><br><br><input type='submit' value='Submit'></form></div><a id='upfirm' href='/update'>Update Firmware</a> <a id='ver'>"+ version + debugstat +"</a></body></html>");
 }
 
 
@@ -234,53 +290,9 @@ float rounding(float in, byte decimalplace) {
   return floor(in * shift + .5) / shift;
 }
 
-float get_temp_refresh() {
-  oneWire.reset();
-  sevseg.refreshDisplay();
-  oneWire.skip();
-  sevseg.refreshDisplay();
-  oneWire.write(0xBE);
-  sevseg.refreshDisplay();
-
-  uint8_t data[9];
-  for (uint8_t i = 0; i < 9; i++) {
-    sevseg.refreshDisplay();
-    data[i] = oneWire.read();
-    sevseg.refreshDisplay();
-  }
-  int16_t rawTemperature = (((int16_t)data[1]) << 8) | data[0];
-  sevseg.refreshDisplay();
-  float temp = 0.0625 * rawTemperature;
-  sevseg.refreshDisplay();
-  oneWire.reset();
-  sevseg.refreshDisplay();
-  oneWire.skip();
-  sevseg.refreshDisplay();
-  oneWire.write(0x44, 0);
-  sevseg.refreshDisplay();
-  return temp;
-}
-
-float get_temp() {
-  oneWire.reset();
-  oneWire.skip();
-  oneWire.write(0xBE);
-
-  uint8_t data[9];
-  for (uint8_t i = 0; i < 9; i++) {
-    data[i] = oneWire.read();
-  }
-  int16_t rawTemperature = (((int16_t)data[1]) << 8) | data[0];
-  float temp = 0.0625 * rawTemperature;
-  oneWire.reset();
-  oneWire.skip();
-  oneWire.write(0x44, 0);
-  return temp;
-}
-
 void faceClock(){
     if (last_hour != hour()) {
-    setTime(CE.toLocal(timeClient.getEpochTime()));
+    timeClient.update();
     if (hour() <= 9) {
       last_time[0] = '0';
       last_time[1] = 48 + hour();
