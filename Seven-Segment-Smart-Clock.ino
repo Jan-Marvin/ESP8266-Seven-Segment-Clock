@@ -37,7 +37,8 @@ struct Config {
   float TEMP_OFFSET;
 };
 
-String version = "1.0.2";
+String version = "1.0.4";
+String led_stat = "checked";
 float temp;
 int last_min, last_hour = -1;
 char last_time[] = "000.0 000.";
@@ -62,7 +63,7 @@ byte digitPins[] = {13,9,15,14,11,10,12,8};
 WiFiUDP ntpUDP;
 
 int GTMOffset = 0;
-NTPClient timeClient(ntpUDP, "pool.ntp.org", GTMOffset*60*60, 59*60*1000);
+NTPClient timeClient(ntpUDP, "pool.ntp.org", GTMOffset*60*60, 60000 * 60 * 24);
 
 TimeChangeRule CEST = {"CEST", Last, Sun, Mar, 2, 120};     // Central European Summer Time
 TimeChangeRule CET = {"CET ", Last, Sun, Oct, 3, 60};       // Central European Standard Time
@@ -203,6 +204,8 @@ void setup() {
   }
     
   if (WiFi.status() == WL_CONNECTED) { debugln("\nIP address: " + WiFi.localIP().toString());}
+  WiFi.setAutoReconnect(true);
+  WiFi.persistent(true);
   timeClient.begin();
   delay ( 1000 );
   if (timeClient.update()){
@@ -261,14 +264,43 @@ void handleconfig() {
     debugln(tmp);
     config.HOSTNAME = tmp;
   }
+  if(server.hasArg("BRIGHTNESS") && server.arg("BRIGHTNESS") != "" && server.arg("BRIGHTNESS") != String(brightness)){
+    tmp = server.arg("BRIGHTNESS");
+    int tmsp = tmp.toInt();
+    if (tmsp > 200) {
+      tmsp = 200;
+    } else if (tmsp < -200) {
+      tmsp = -200;
+    }
+    debug("New BRIGHTNESS: ");
+    debugln(tmsp);
+    brightness = tmsp;
+    sevseg.setBrightness(brightness);
+  }
+  
+  if(server.hasArg("LED")){
+    tmp = server.arg("LED");
+      if (led_stat == "") {
+        led_stat = "checked";
+        face_status = 1;
+        debugln("New LED stat: on");
+      }
+    } else {
+      if (led_stat == "checked") {
+        led_stat = "";
+        face_status = 0;
+        sevseg.blank();
+        debugln("New LED stat: off");
+      }    
+  }
   if ((server.arg("SSID") != "" || server.arg("PW") != "" || server.arg("HOSTNAME") != "")){
     debugln("Reset");
-    server.send(200, "text/html", "<html><head><title>ESP8266-Clock Web-UI</title><meta http-equiv='refresh' content='5; url=/'><style>#text,h2{text-align:center}body{font-family:Helvetica;background-color:#161618;color:#f2f5f4}</style></head><body><h2>ESP8266-Clock Web-UI</h2><div id='text'><p>Configuration updated!</p><p>Restarting!</p></div></body></html>");
+    server.send(200, "text/html", "<html><head><title>ESP8266-Clock Web-UI</title><meta http-equiv='refresh' content='5; url=/'><style>#text,h2{text-align:center}body{font-family:Helvetica;background-color:#161618;color:#f2f5f4}</style></head><body><h2>ESP8266-Clock Web-UI</h2><div id='text'><p>Configuration updated!</p><p>Restarting, pleas wait!</p></div></body></html>");
     saveConfiguration(filename_conf, config);
     delay(3000);
     resetFunc();
   } else {
-    server.send(200, "text/html", "<html><head><title>ESP8266-Clock Web-UI</title><meta http-equiv='refresh' content='5; url=/'><style>#text,h2{text-align:center}body{font-family:Helvetica;background-color:#161618;color:#f2f5f4}</style></head><body><h2>ESP8266-Clock Web-UI</h2><div id='text'><p>Configuration updated!</p></div></body></html>");
+    server.send(200, "text/html", "<html><head><title>ESP8266-Clock Web-UI</title><meta http-equiv='refresh' content='3; url=/'><style>#text,h2{text-align:center}body{font-family:Helvetica;background-color:#161618;color:#f2f5f4}</style></head><body><h2>ESP8266-Clock Web-UI</h2><div id='text'><p>Configuration updated, pleas wait!</p></div></body></html>");
     saveConfiguration(filename_conf, config);
   }
 }
@@ -278,7 +310,7 @@ void handletemp(){
 }
  
 void configurehandler() {
-  server.send(200, "text/html", "<html><head><title>ESP8266-Clock Web-UI</title><style>#formdiv,h2{text-align:center}label{display:block;margin-right:auto;margin-left:auto}#upfirm{position:fixed;color:#888;bottom:8px;right:16px}#ver{position:fixed;color:#888;bottom:8px;left:16px}body{font-family:Helvetica;background-color:#161618;color:#f2f5f4}</style></head><body><h2>ESP8266-Clock Web-UI</h2><div id='formdiv'><form action='/setconfig' onsubmit='return confirm(\"Save settings?\")'><label for='fname'>WIFI Name ("+String(config.WIFI_SSID)+"):</label><input id='SSID' name='SSID'><br><br><label for='lname'>WIFI PW:</label><input type='password' id='PW' name='PW'><br><br><label for='lname'>TEMP OFFSET ("+String(config.TEMP_OFFSET,3)+"):</label><input id='TEMP_OFFSET' name='TEMP_OFFSET'><br><br><label for='lname'>Hostname ("+(config.HOSTNAME)+"):</label><input id='HOSTNAME' name='HOSTNAME'><br><br><input type='submit' value='Submit'></form></div><a id='upfirm' href='/update'>Update Firmware</a> <a id='ver'>"+ version + debugstat +"</a></body></html>");
+  server.send(200, "text/html", "<html><head><title>ESP8266-Clock Web-UI</title><style>#formdiv,h2{text-align:center}label{display:block;margin-right:auto;margin-left:auto}#upfirm{position:fixed;color:#888;bottom:8px;right:16px}#ver{position:fixed;color:#888;bottom:8px;left:16px}body{font-family:Helvetica;background-color:#161618;color:#f2f5f4}</style></head><body><h2>ESP8266-Clock Web-UI</h2><div id='formdiv'><form action='/setconfig' onsubmit='return confirm(\"Save settings?\")'><label for='fname'>WIFI Name ("+String(config.WIFI_SSID)+"):</label><input id='SSID' name='SSID'><br><br><label for='lname'>WIFI PW:</label><input type='password' id='PW' name='PW'><br><br><label for='lname'>TEMP OFFSET ("+String(config.TEMP_OFFSET,3)+"):</label><input id='TEMP_OFFSET' name='TEMP_OFFSET'><br><br><label for='lname'>Hostname ("+(config.HOSTNAME)+"):</label><input id='HOSTNAME' name='HOSTNAME'><br><br><label for='lname'>Brightness ("+String(brightness)+"):</label><input id='BRIGHTNESS' name='BRIGHTNESS'><br><br><label1 for='lname'>LED status:</label1><input type='checkbox' id='LED' name='LED'"+ led_stat+"><br><br><input type='submit' value='Submit'></form></div><a id='upfirm' href='/update'>Update Firmware</a> <a id='ver'>"+ version + debugstat +"</a></body></html>");
 }
 
 
@@ -291,13 +323,11 @@ float rounding(float in, byte decimalplace) {
 }
 
 void faceClock(){
-    if (last_hour != hour()) {
-    timeClient.update();
+  if (last_hour != hour()) {
     if (hour() <= 9) {
       last_time[0] = '0';
       last_time[1] = 48 + hour();
     } else {
-
       last_time[0] = 48 + ((hour()/10)%10);
       last_time[1] = 48 + (hour()%10);
     }
@@ -319,7 +349,7 @@ void faceClock(){
 
   if (millis() - last_temp_time >= 20000) {
     float a;
-    if (face_status) {
+    if (face_status == 1) {
       a = (rounding((get_temp_refresh() + config.TEMP_OFFSET), 1)*10);
     }
     else {
@@ -339,8 +369,9 @@ void faceClock(){
 
 void loop() {
   server.handleClient();
-  if (face_status == 1) {
-    faceClock();
+  timeClient.update();
+  faceClock();
+  if (face_status == 1){
     sevseg.refreshDisplay();
   }
 }
