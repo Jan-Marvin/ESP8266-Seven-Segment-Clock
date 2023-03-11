@@ -5,9 +5,7 @@
 #include <ESP8266WiFi.h>
 #include <ESP8266HTTPUpdateServer.h>
 #include <OneWire.h>
-#include <NTPClient.h>
-#include <WiFiUdp.h>
-#include <Timezone.h>
+#include <ezTime.h>
 
 #define DEBUG 0
 #if DEBUG == 1
@@ -37,12 +35,10 @@ struct Config {
   float TEMP_OFFSET;
 };
 
-String version = "1.0.4";
+String version = "1.0.5";
 String led_stat = "checked";
 float temp;
-int last_min, last_hour = -1;
-char last_time[] = "000.0 000.";
-unsigned long last_temp_time = 0;
+char display[] = "000.0 000.";
 
 byte oneWire_data = D3;
 int face_status = 1;
@@ -59,15 +55,7 @@ SevSegShift sevseg(SHIFT_PIN_DS, SHIFT_PIN_SHCP, SHIFT_PIN_STCP);
 byte segmentPins[] = {5,2,7,1,3,6,0,4}; // ABCDEFGP
 byte digitPins[] = {13,9,15,14,11,10,12,8}; 
 
-// NTP
-WiFiUDP ntpUDP;
-
-int GTMOffset = 0;
-NTPClient timeClient(ntpUDP, "pool.ntp.org", GTMOffset*60*60, 60000 * 60 * 24);
-
-TimeChangeRule CEST = {"CEST", Last, Sun, Mar, 2, 120};     // Central European Summer Time
-TimeChangeRule CET = {"CET ", Last, Sun, Oct, 3, 60};       // Central European Standard Time
-Timezone CE(CEST, CET);
+Timezone Germany;
 
 void loadConfiguration(const char *filename_conf, Config &config) {
   File file = LittleFS.open(filename_conf, "r");
@@ -203,30 +191,31 @@ void setup() {
     }
   }
     
-  if (WiFi.status() == WL_CONNECTED) { debugln("\nIP address: " + WiFi.localIP().toString());}
+  debugln("\nIP address: " + WiFi.localIP().toString());
   WiFi.setAutoReconnect(true);
   WiFi.persistent(true);
-  timeClient.begin();
+
   delay ( 1000 );
-  if (timeClient.update()){
-   debug( "Adjust local clock to: ");
-   unsigned long epoch = timeClient.getEpochTime();
-   setTime(CE.toLocal(epoch));
-   debugln(String(hour()) + ":" + String(minute()) + ":" + String(second()));
-  }else{
-    debugln("NTP Update not WORK!!");
-  }
+
+  debugln("Get & set time");
+  waitForSync();
+  Germany.setLocation("Europe/Berlin");
+  Serial.println("Time: " + Germany.dateTime());
+
+  display[0] = Germany.dateTime("H").charAt(0);
+  display[1] = Germany.dateTime("H").charAt(1);
+  display[2] = Germany.dateTime("i").charAt(0);
+  display[4] = Germany.dateTime("i").charAt(1);
   
   debugln("Get & Set Temp");
   float a = (rounding((get_temp() + config.TEMP_OFFSET), 1)*10);
   if (int(a) >= 100) {
-    last_time[6] = 48 + (int(a)/100) % 10;
+    display[6] = 48 + (int(a)/100) % 10;
   } else {
-    last_time[6] = last_time[5];
+    display[6] = display[5];
   }
-  last_time[7] = 48 + (int(a)/10) % 10;
-  last_time[8] = 48 + (int(a) % 10);
-  last_temp_time = millis();
+  display[7] = 48 + (int(a)/10) % 10;
+  display[8] = 48 + (int(a) % 10);
   
   httpUpdater.setup(&server);
   server.on("/", configurehandler);
@@ -323,31 +312,7 @@ float rounding(float in, byte decimalplace) {
 }
 
 void faceClock(){
-  if (last_hour != hour()) {
-    if (hour() <= 9) {
-      last_time[0] = '0';
-      last_time[1] = 48 + hour();
-    } else {
-      last_time[0] = 48 + ((hour()/10)%10);
-      last_time[1] = 48 + (hour()%10);
-    }
-    sevseg.setChars(last_time);
-    last_hour = hour();
-  }
-  
-  if (last_min != minute()) {
-    if (minute() <= 9) {
-      last_time[2] = '0';
-      last_time[4] = 48 + minute();
-    } else {
-      last_time[2] = 48 + ((minute()/10)%10);
-      last_time[4] = 48 + (minute()%10);
-    }
-    sevseg.setChars(last_time);
-    last_min = minute();
-  }
-
-  if (millis() - last_temp_time >= 20000) {
+  if (minuteChanged()) {
     float a;
     if (face_status == 1) {
       a = (rounding((get_temp_refresh() + config.TEMP_OFFSET), 1)*10);
@@ -356,20 +321,23 @@ void faceClock(){
       a = (rounding((get_temp() + config.TEMP_OFFSET), 1)*10);
     }
     if (int(a) >= 100) {
-      last_time[6] = 48 + (int(a)/100) % 10;
+      display[6] = 48 + (int(a)/100) % 10;
     } else {
-      last_time[6] = last_time[5];
+      display[6] = display[5];
     }
-    last_time[7] = 48 + (int(a)/10) % 10;
-    last_time[8] = 48 + (int(a) % 10);
-    last_temp_time = millis();
-    sevseg.setChars(last_time);
+    display[7] = 48 + (int(a)/10) % 10;
+    display[8] = 48 + (int(a) % 10);
+    display[0] = Germany.dateTime("H").charAt(0);
+    display[1] = Germany.dateTime("H").charAt(1);
+    display[2] = Germany.dateTime("i").charAt(0);
+    display[4] = Germany.dateTime("i").charAt(1);
   }
+  sevseg.setChars(display);
 }
 
 void loop() {
+  events();
   server.handleClient();
-  timeClient.update();
   faceClock();
   if (face_status == 1){
     sevseg.refreshDisplay();
