@@ -4,10 +4,8 @@
 
 
 Required libraries: [OneWire](https://github.com/PaulStoffregen/OneWire),
-                    [NTPClient](https://github.com/arduino-libraries/NTPClient)
-                    [Timezone](https://github.com/JChristensen/Timezone),
-                    [Time](https://github.com/PaulStoffregen/Time),
-					[ArduinoJson](https://github.com/bblanchon/ArduinoJson),
-					[SevSegShift](https://github.com/bridystone/SevSegShift)
+                    [ezTime](https://github.com/ropg/ezTime)
+                    [ArduinoJson](https://github.com/bblanchon/ArduinoJson),
+                    [SevSegShift](https://github.com/bridystone/SevSegShift)
 
 Sketch of my smart clock.
