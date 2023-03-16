@@ -24,9 +24,7 @@
 #define SHIFT_PIN_STCP D1 /* Shift Register Storage PIN */
 #define SHIFT_PIN_SHCP D2 /* Shift Register Shift PIN */
 
-#define ONE_WIRE_BUS D3
-
-OneWire oneWire(ONE_WIRE_BUS);
+OneWire oneWire(D3);
 
 struct Config {
   char WIFI_SSID[33];
@@ -35,19 +33,16 @@ struct Config {
   float TEMP_OFFSET;
 };
 
-String version = "1.0.5";
+String version = "1.0.6";
 String led_stat = "checked";
-float temp;
 char display[] = "000.0 000.";
 
-byte oneWire_data = D3;
 int face_status = 1;
 int brightness = 100;
 
 ESP8266WebServer server(80);
 ESP8266HTTPUpdateServer httpUpdater; 
 
-const char *filename_conf = "/config.json";
 Config config;
 
 SevSegShift sevseg(SHIFT_PIN_DS, SHIFT_PIN_SHCP, SHIFT_PIN_STCP);
@@ -57,8 +52,8 @@ byte digitPins[] = {13,9,15,14,11,10,12,8};
 
 Timezone Germany;
 
-void loadConfiguration(const char *filename_conf, Config &config) {
-  File file = LittleFS.open(filename_conf, "r");
+void loadConfiguration(Config &config) {
+  File file = LittleFS.open("/config.json", "r");
   StaticJsonDocument<256> doc;
 
   DeserializationError error = deserializeJson(doc, file);
@@ -79,10 +74,8 @@ void loadConfiguration(const char *filename_conf, Config &config) {
   file.close();
 }
 
-void saveConfiguration(const char *filename_conf, const Config &config) {
-  LittleFS.remove(filename_conf);
-
-  File file = LittleFS.open(filename_conf, "w");
+void saveConfiguration(const Config &config) {
+  File file = LittleFS.open("/config.json", "w");
   if (!file) {
     debugln("Failed to create file");
     return;
@@ -100,8 +93,6 @@ void saveConfiguration(const char *filename_conf, const Config &config) {
   }
   file.close();
 }
-
-void(* resetFunc) (void) = 0;
 
 float get_temp_refresh() {
   oneWire.reset();
@@ -147,82 +138,14 @@ float get_temp() {
   return temp;
 }
 
-void setup() {
-  serial(115200);
-    while (!Serial) {};
-  debugln("###Begin setup###");
-  
-  byte numDigits = 8;
-  bool resistorsOnSegments = false; // 'false' means resistors are on digit pins
-  byte hardwareConfig = COMMON_ANODE; // See README.md for options
-  bool updateWithDelays = false; // Default 'false' is Recommended
-  bool leadingZeros = false; // Use 'true' if you'd like to keep the leading zeros
-  bool disableDecPoint = false; // Use 'true' if your decimal point doesn't exist or isn't connected. Then, you only need to specify 7 segmentPins[]
-
-  sevseg.begin(hardwareConfig, numDigits, digitPins, segmentPins, resistorsOnSegments, updateWithDelays, leadingZeros, disableDecPoint);
-
-  if (!LittleFS.begin()){
-    debugln("An Error has occurred while mounting SPIFFS");
-    return;
+float rounding(float in, byte decimalplace) {
+  float shift = 1;
+  while (decimalplace--) {
+    sevseg.refreshDisplay();
+    shift *= 10;
+    sevseg.refreshDisplay();
   }
-
-  debugln("Loading configuration...");
-  loadConfiguration(filename_conf, config);
-
-  WiFi.hostname(config.HOSTNAME);
-  WiFi.begin(config.WIFI_SSID, config.WIFI_KEY);  //Connect to the WiFi network
-
-  int nr = 0;
-  debug("Conecting to Wifi");
-  while (WiFi.status() != WL_CONNECTED) {  //Wait for connection
-    delay(500);
-    debug(".");
-    nr++;
-    if (nr > 60) {
-      debugln("\nStart recovery_ap");
-      WiFi.disconnect();
-      WiFi.softAP("ESP8266-Clock-Setup", "12345678");
-      debugln("SSID: "+ String(WiFi.softAPSSID()));
-      debugln("PW: "+ String(WiFi.softAPPSK()));
-      debugln("IP: "+ WiFi.softAPIP().toString());
-      sevseg.setNumber(11111111);
-      face_status = 2;
-      break;
-    }
-  }
-    
-  debugln("\nIP address: " + WiFi.localIP().toString());
-  WiFi.setAutoReconnect(true);
-  WiFi.persistent(true);
-
-  delay ( 1000 );
-
-  debugln("Get & set time");
-  waitForSync();
-  Germany.setLocation("Europe/Berlin");
-  Serial.println("Time: " + Germany.dateTime());
-
-  display[0] = Germany.dateTime("H").charAt(0);
-  display[1] = Germany.dateTime("H").charAt(1);
-  display[2] = Germany.dateTime("i").charAt(0);
-  display[4] = Germany.dateTime("i").charAt(1);
-  
-  debugln("Get & Set Temp");
-  float a = (rounding((get_temp() + config.TEMP_OFFSET), 1)*10);
-  if (int(a) >= 100) {
-    display[6] = 48 + (int(a)/100) % 10;
-  } else {
-    display[6] = display[5];
-  }
-  display[7] = 48 + (int(a)/10) % 10;
-  display[8] = 48 + (int(a) % 10);
-  
-  httpUpdater.setup(&server);
-  server.on("/", configurehandler);
-  server.on("/setconfig", handleconfig);
-  server.on("/gettemp", handletemp);
-  server.begin();
-  debugln("###Setup complete###\n");
+  return floor(in * shift + .5) / shift;
 }
 
 void handleconfig() {
@@ -285,12 +208,12 @@ void handleconfig() {
   if ((server.arg("SSID") != "" || server.arg("PW") != "" || server.arg("HOSTNAME") != "")){
     debugln("Reset");
     server.send(200, "text/html", "<html><head><title>ESP8266-Clock Web-UI</title><meta http-equiv='refresh' content='5; url=/'><style>#text,h2{text-align:center}body{font-family:Helvetica;background-color:#161618;color:#f2f5f4}</style></head><body><h2>ESP8266-Clock Web-UI</h2><div id='text'><p>Configuration updated!</p><p>Restarting, pleas wait!</p></div></body></html>");
-    saveConfiguration(filename_conf, config);
+    saveConfiguration(config);
     delay(3000);
-    resetFunc();
+    ESP.restart();
   } else {
     server.send(200, "text/html", "<html><head><title>ESP8266-Clock Web-UI</title><meta http-equiv='refresh' content='3; url=/'><style>#text,h2{text-align:center}body{font-family:Helvetica;background-color:#161618;color:#f2f5f4}</style></head><body><h2>ESP8266-Clock Web-UI</h2><div id='text'><p>Configuration updated, pleas wait!</p></div></body></html>");
-    saveConfiguration(filename_conf, config);
+    saveConfiguration(config);
   }
 }
 
@@ -302,35 +225,94 @@ void configurehandler() {
   server.send(200, "text/html", "<html><head><title>ESP8266-Clock Web-UI</title><style>#formdiv,h2{text-align:center}label{display:block;margin-right:auto;margin-left:auto}#upfirm{position:fixed;color:#888;bottom:8px;right:16px}#ver{position:fixed;color:#888;bottom:8px;left:16px}body{font-family:Helvetica;background-color:#161618;color:#f2f5f4}</style></head><body><h2>ESP8266-Clock Web-UI</h2><div id='formdiv'><form action='/setconfig' onsubmit='return confirm(\"Save settings?\")'><label for='fname'>WIFI Name ("+String(config.WIFI_SSID)+"):</label><input id='SSID' name='SSID'><br><br><label for='lname'>WIFI PW:</label><input type='password' id='PW' name='PW'><br><br><label for='lname'>TEMP OFFSET ("+String(config.TEMP_OFFSET,3)+"):</label><input id='TEMP_OFFSET' name='TEMP_OFFSET'><br><br><label for='lname'>Hostname ("+(config.HOSTNAME)+"):</label><input id='HOSTNAME' name='HOSTNAME'><br><br><label for='lname'>Brightness ("+String(brightness)+"):</label><input id='BRIGHTNESS' name='BRIGHTNESS'><br><br><label1 for='lname'>LED status:</label1><input type='checkbox' id='LED' name='LED'"+ led_stat+"><br><br><input type='submit' value='Submit'></form></div><a id='upfirm' href='/update'>Update Firmware</a> <a id='ver'>"+ version + debugstat +"</a></body></html>");
 }
 
+void setup() {
+  serial(115200);
+    while (!Serial) {};
+  debugln("###Begin setup###");
+  
+  byte numDigits = 8;
+  bool resistorsOnSegments = false; // 'false' means resistors are on digit pins
+  byte hardwareConfig = COMMON_ANODE; // See README.md for options
+  bool updateWithDelays = false; // Default 'false' is Recommended
+  bool leadingZeros = false; // Use 'true' if you'd like to keep the leading zeros
+  bool disableDecPoint = false; // Use 'true' if your decimal point doesn't exist or isn't connected. Then, you only need to specify 7 segmentPins[]
 
-float rounding(float in, byte decimalplace) {
-  float shift = 1;
-  while (decimalplace--) {
-    shift *= 10;
+  sevseg.begin(hardwareConfig, numDigits, digitPins, segmentPins, resistorsOnSegments, updateWithDelays, leadingZeros, disableDecPoint);
+
+  if (!LittleFS.begin()){
+    debugln("An Error has occurred while mounting LittleFS");
+    return;
   }
-  return floor(in * shift + .5) / shift;
+
+  debugln("Loading configuration...");
+  loadConfiguration(config);
+
+  WiFi.hostname(config.HOSTNAME);
+  WiFi.begin(config.WIFI_SSID, config.WIFI_KEY);  //Connect to the WiFi network
+
+  int nr = 0;
+  debug("Conecting to Wifi");
+  while (WiFi.status() != WL_CONNECTED) {  //Wait for connection
+    delay(500);
+    debug(".");
+    nr++;
+    if (nr > 60) {
+      debugln("\nStart recovery_ap");
+      WiFi.disconnect();
+      WiFi.softAP("ESP8266-Clock-Setup", "12345678");
+      debugln("SSID: "+ String(WiFi.softAPSSID()));
+      debugln("PW: "+ String(WiFi.softAPPSK()));
+      debugln("IP: "+ WiFi.softAPIP().toString());
+      sevseg.setNumber(11111111);
+      face_status = 2;
+      httpUpdater.setup(&server);
+      server.on("/", configurehandler);
+      server.on("/setconfig", handleconfig);
+      server.on("/gettemp", handletemp);
+      server.begin();
+      return;
+    }
+  }
+    
+  debugln("\nIP address: " + WiFi.localIP().toString());
+  WiFi.setAutoReconnect(true);
+  WiFi.persistent(true);
+
+  delay ( 1000 );
+  debugln("Get & set time");
+  waitForSync();
+  Germany.setLocation("Europe/Berlin");
+  Serial.println("Time: " + Germany.dateTime());
+  
+  httpUpdater.setup(&server);
+  server.on("/", configurehandler);
+  server.on("/setconfig", handleconfig);
+  server.on("/gettemp", handletemp);
+  server.begin();
+  debugln("###Setup complete###\n");
 }
 
 void faceClock(){
   if (minuteChanged()) {
-    float a;
-    if (face_status == 1) {
-      a = (rounding((get_temp_refresh() + config.TEMP_OFFSET), 1)*10);
-    }
-    else {
-      a = (rounding((get_temp() + config.TEMP_OFFSET), 1)*10);
-    }
-    if (int(a) >= 100) {
-      display[6] = 48 + (int(a)/100) % 10;
+    sevseg.refreshDisplay();
+    String timet = Germany.dateTime("Hi");
+    sevseg.refreshDisplay();
+    float temp = (rounding((get_temp_refresh() + config.TEMP_OFFSET), 1)*10);
+    sevseg.refreshDisplay();
+    if (int(temp) >= 100) {
+      display[6] = 48 + (int(temp)/100) % 10;
     } else {
       display[6] = display[5];
     }
-    display[7] = 48 + (int(a)/10) % 10;
-    display[8] = 48 + (int(a) % 10);
-    display[0] = Germany.dateTime("H").charAt(0);
-    display[1] = Germany.dateTime("H").charAt(1);
-    display[2] = Germany.dateTime("i").charAt(0);
-    display[4] = Germany.dateTime("i").charAt(1);
+    sevseg.refreshDisplay();
+    display[7] = 48 + (int(temp)/10) % 10;
+    sevseg.refreshDisplay();
+    display[8] = 48 + (int(temp) % 10);
+    sevseg.refreshDisplay();
+    display[0] = timet[0];
+    display[1] = timet[1];
+    display[2] = timet[2];
+    display[4] = timet[3];
   }
   sevseg.setChars(display);
 }
